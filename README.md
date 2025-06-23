@@ -1,4 +1,4 @@
-# Comentarii despre cum se rulează aplicația (le poți păstra la sfârșit pentru referință)
+
 # Pentru a rula această aplicație:
 # 1. Salvați codul ca app_streamlit.py (sau orice nume .py)
 # 2. Deschideți un terminal în directorul proiectului.
