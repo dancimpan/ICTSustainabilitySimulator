@@ -12,7 +12,10 @@ from openpyxl.drawing.image import Image
 # ==============================================================================
 # == SECȚIUNEA 1: CONSTANTE PENTRU ECHIVALENTE REALE
 # ==============================================================================
+# Sursa pentru eficiență EV: Medie generală.
 EV_EFFICIENCY_KWH_PER_KM = 0.18
+# Sursa pentru absorbție copac: Un copac matur absoarbe ~22kg CO2/an.
+# Calcul: 22000 grame / 365 zile / 24 ore
 GCO2_ABSORBED_BY_TREE_PER_HOUR = 22000.0 / 365.0 / 24.0
 
 
@@ -39,12 +42,17 @@ def get_real_world_equivalents(estimated_co2_g, gco2eq_per_kwh_factor):
     """
     equivalents = {}
     if estimated_co2_g > 0.0001:
+        # Calculăm emisiile de gCO2 per km pentru o mașină electrică
+        # pe baza eficienței (kWh/km) și a factorului de emisii al rețelei (gCO2/kWh)
         gco2_per_km_ev = EV_EFFICIENCY_KWH_PER_KM * gco2eq_per_kwh_factor
+        
         if gco2_per_km_ev > 0:
             km_driven_ev = estimated_co2_g / gco2_per_km_ev
-            equivalents[f"km parcurși cu o mașină electrică"] = km_driven_ev
+            equivalents["km parcurși cu o mașină electrică"] = km_driven_ev
+            
         tree_hours = estimated_co2_g / GCO2_ABSORBED_BY_TREE_PER_HOUR
-        equivalents[f"ore necesare unui copac pentru a absorbi"] = tree_hours
+        equivalents["ore necesare unui copac pentru a absorbi"] = tree_hours
+        
     return equivalents
 
 # ==============================================================================
