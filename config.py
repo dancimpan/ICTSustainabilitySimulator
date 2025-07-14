@@ -26,7 +26,18 @@ HARDWARE_PROFILES = {
 DEFAULT_HARDWARE_PROFILE_NAME = "Desktop Performant Mediu"
 
 # --- Valori CO2 ---
+# Sursa pentru valori: Date aproximative bazate pe medii anuale de la Electricity Maps & alte surse (EIA, etc.)
+# Acestea sunt ILUSTRATIVE pentru a arăta diversitatea.
 GCO2EQ_PER_KWH_DEFAULT = 275.0 # Valoare implicită pentru gCO2eq/kWh
+
+HARDCODED_CO2_ZONES = {
+    # Numele afișat în UI: { 'value': gCO2eq/kWh, 'description': 'Sursa mixului energetic' }
+    "Franța (Nuclear)":      { "value": 55.0,  "description": "Mix energetic dominat de nuclear, emisii foarte scăzute." },
+    "Germania (Mix-Tranziție)": { "value": 390.0, "description": "Mix complex cu regenerabile, dar încă dependent de cărbune și gaz." },
+    "Polonia (Cărbune)":     { "value": 780.0, "description": "Mix energetic dominat de cărbune, emisii foarte ridicate." },
+    "Norvegia (Hidro)":      { "value": 25.0,  "description": "Mix energetic aproape complet hidroelectric, emisii extrem de scăzute." },
+    "SUA (Medie)":           { "value": 410.0, "description": "Medie pentru un mix energetic foarte diversificat la nivel național." }
+}
 
 # --- Nume Scenarii ---
 SCENARIU_SORTARE = "Scenariul 1: Sortarea Datelor Clienților"
@@ -35,9 +46,11 @@ SCENARIU_FILTRARE_LOGURI = "Scenariul 3: Filtrarea și Analiza Log-urilor"
 SCENARIO_OPTIONS = [SCENARIU_SORTARE, SCENARIU_RAPORT_VANZARI, SCENARIU_FILTRARE_LOGURI]
 
 # --- Opțiuni Sursă CO2 ---
+# Generăm dinamic lista de opțiuni pentru a fi extensibilă
 ZONE_MEDIA_UE = "Media UE (Implicit)"
 ZONE_ROMANIA_API = "România (Live API)"
-CO2_ZONE_OPTIONS = [ZONE_MEDIA_UE, ZONE_ROMANIA_API]
+# Lista începe cu opțiunile standard și este extinsă cu cele hardcodate
+CO2_ZONE_OPTIONS = [ZONE_MEDIA_UE, ZONE_ROMANIA_API] + list(HARDCODED_CO2_ZONES.keys())
 
 # --- Valori Implicite pentru Input-uri Sidebar ---
 DEFAULT_INPUT_VALUES = {
