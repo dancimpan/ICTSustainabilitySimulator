@@ -31,19 +31,42 @@ kwh_data_factor_selected = current_hardware_factors["kwh_per_data_move"]
 st.sidebar.caption(f"Profil Hardware: **{selected_hardware_profile_name}**")
 st.sidebar.caption(f"{current_hardware_factors['description']}")
 st.sidebar.caption(f"kWh/Op CPU: {kwh_cpu_factor_selected:.2e}, kWh/Mișc.Date: {kwh_data_factor_selected:.2e}")
+
+# --- Logică actualizată pentru sursa CO2 ---
 selected_co2_source = st.sidebar.selectbox("Sursa pentru Intensitatea Carbonică (gCO2eq/kWh):", options=config.CO2_ZONE_OPTIONS, index=0)
+
+# Inițializăm valorile
 gco2_per_kwh_final = config.GCO2EQ_PER_KWH_DEFAULT
-EM_API_KEY_AVAILABLE = bool(os.getenv("EM_API_KEY"))
+source_description = "Valoare medie estimată pentru Uniunea Europeană."
+
 if selected_co2_source == config.ZONE_ROMANIA_API:
+    # Cazul 1: Utilizatorul vrea date live pentru România
+    EM_API_KEY_AVAILABLE = bool(os.getenv("EM_API_KEY"))
     if EM_API_KEY_AVAILABLE:
         romania_intensity = api_client.get_romania_carbon_intensity()
         if romania_intensity is not None:
             gco2_per_kwh_final = romania_intensity
+            source_description = "Valoare live de la Electricity Maps API."
+        else:
+            source_description = "Apelul API a eșuat, se folosește valoarea implicită."
     else:
         if 'api_key_warning_main_shown' not in st.session_state:
-            st.sidebar.warning(f"Cheia API (EM_API_KEY) lipsește. Se folosește valoarea implicită pentru '{config.ZONE_ROMANIA_API}'.")
+            st.sidebar.warning(f"Cheia API (EM_API_KEY) lipsește. Se folosește valoarea implicită.")
             st.session_state.api_key_warning_main_shown = True
-st.sidebar.caption(f"Factor CO2 utilizat: {gco2_per_kwh_final:.2f} gCO2eq/kWh.")
+        source_description = "Cheie API lipsă, se folosește valoarea implicită."
+
+elif selected_co2_source in config.HARDCODED_CO2_ZONES:
+    # Cazul 2: Utilizatorul a selectat o țară hardcodată
+    zone_data = config.HARDCODED_CO2_ZONES[selected_co2_source]
+    gco2_per_kwh_final = zone_data['value']
+    source_description = zone_data['description']
+
+# Cazul 3 (else) este implicit: se folosesc valorile pentru Media UE deja setate la început.
+
+st.sidebar.caption(f"Descriere Sursă: *{source_description}*")
+st.sidebar.metric(label="Factor CO2 Utilizat", value=f"{gco2_per_kwh_final:.2f} gCO2eq/kWh")
+
+# Stocarea valorilor default în session_state
 for key, value in config.DEFAULT_INPUT_VALUES.items():
     if key not in st.session_state:
         st.session_state[key] = value
@@ -98,8 +121,58 @@ if run_button: st.session_state.simulation_has_run = True
 # --- Logică Simulare și Afișare Rezultate ---
 if st.session_state.simulation_has_run:
     if run_scalability_analysis:
-        # ... (codul pentru analiza de scalabilitate rămâne neschimbat) ...
-        pass
+        st.header(f"📈 Analiză de Scalabilitate pentru {selected_scenario.split(':')[1].strip()}")
+        st.info(f"Se simulează impactul pentru diferite dimensiuni ale setului de date (de la {st.session_state.scalability_start} la {st.session_state.scalability_end} pentru '{current_scaling_param['name']}').")
+
+        scalability_results = []
+        param_key_to_scale = current_scaling_param['key']
+        scale_range = np.linspace(st.session_state.scalability_start, st.session_state.scalability_end, st.session_state.scalability_steps, dtype=int)
+
+        with st.spinner("Se execută analiza de scalabilitate..."):
+            for val in scale_range:
+                params = {k: st.session_state[k] for k in config.DEFAULT_INPUT_VALUES.keys()}
+                params[param_key_to_scale] = val
+                
+                models = []
+                kwh_cpu, kwh_data = kwh_cpu_factor_selected, kwh_data_factor_selected
+                
+                if selected_scenario == config.SCENARIU_SORTARE:
+                    models = [
+                        api_handler.model_standard_sort(params['s1_N'], params['s1_avg_rec_size'], kwh_cpu, kwh_data, gco2_per_kwh_final),
+                        api_handler.model_efficient_sort(params['s1_N'], params['s1_avg_rec_size'], kwh_cpu, kwh_data, gco2_per_kwh_final),
+                        api_handler.model_sort_index(params['s1_N'], params['s1_avg_rec_size'], params['s1_key_idx_size'], kwh_cpu, kwh_data, gco2_per_kwh_final)
+                    ]
+                elif selected_scenario == config.SCENARIU_RAPORT_VANZARI:
+                    models = [
+                        api_handler.model_standard_sales_report(params['s2_N_trans'], params['s2_avg_items'], params['s2_trans_header_size'], params['s2_item_size'], kwh_cpu, kwh_data, gco2_per_kwh_final),
+                        api_handler.model_green_sales_report(params['s2_N_trans'], params['s2_avg_items'], params['s2_trans_header_size'], params['s2_item_size'], kwh_cpu, kwh_data, gco2_per_kwh_final)
+                    ]
+                elif selected_scenario == config.SCENARIU_FILTRARE_LOGURI:
+                    models = [
+                        api_handler.model_standard_log_filter(params['s3_N_lines'], params['s3_avg_line_len'], params['s3_err_perc'], params['s3_err_msg_size'], kwh_cpu, kwh_data, gco2_per_kwh_final),
+                        api_handler.model_green_log_filter(params['s3_N_lines'], params['s3_avg_line_len'], params['s3_err_perc'], params['s3_err_msg_size'], kwh_cpu, kwh_data, gco2_per_kwh_final)
+                    ]
+
+                for res in models:
+                    res[current_scaling_param['name']] = val
+                    scalability_results.append(res)
+        
+        if scalability_results:
+            df_scaling = pd.DataFrame(scalability_results)
+            col1, col2 = st.columns(2)
+            with col1:
+                st.subheader("Scalabilitate CO2")
+                fig_co2_scaling = px.line(df_scaling, x=current_scaling_param['name'], y="estimated_co2_g", color="name", title="Impactul CO2 în funcție de mărimea datelor", labels={"estimated_co2_g": "Emisii CO2 (g)", "name": "Model"}, markers=True)
+                st.plotly_chart(fig_co2_scaling, use_container_width=True)
+            with col2:
+                st.subheader("Scalabilitate Operații CPU")
+                fig_cpu_scaling = px.line(df_scaling, x=current_scaling_param['name'], y="cpu_operations", color="name", title="Operații CPU în funcție de mărimea datelor", labels={"cpu_operations": "Operații CPU (unități abstracte)", "name": "Model"}, markers=True)
+                st.plotly_chart(fig_cpu_scaling, use_container_width=True)
+            with st.expander("Vezi datele brute de scalabilitate"):
+                st.dataframe(df_scaling)
+        else:
+            st.warning("Nu s-au putut genera rezultate pentru analiza de scalabilitate.")
+    
     else: # Ramura pentru o singură rulare
         all_results, valid_inputs = [], False
         kwh_cpu, kwh_data = kwh_cpu_factor_selected, kwh_data_factor_selected
@@ -180,7 +253,6 @@ if st.session_state.simulation_has_run:
             )
             st.markdown("---")
 
-            # --- MODIFICAT: Adăugarea noului tab ---
             tab_rezumat, tab_grafice_costuri, tab_grafice_impact, tab_istoric, tab_what_if = st.tabs([
                 "📝 Rezumat & Reduceri", "📈 Grafice Costuri", "🌍 Grafice Impact", "📜 Istoric Comparații", "🔬 Analiză 'What-If'"
             ])
@@ -189,6 +261,18 @@ if st.session_state.simulation_has_run:
                 st.subheader("Estimări Costuri & Impact Ambiental (Valori Absolute)")
                 for i, result in enumerate(all_results):
                     st.markdown(f"#### Model: {result.get('name', 'N/A')}")
+                    
+                    real_world_eq = utils.get_real_world_equivalents(result.get('estimated_co2_g', 0.0), gco2_per_kwh_final)
+                    eq_text = ""
+                    if real_world_eq:
+                        km_ev = real_world_eq.get("km parcurși cu o mașină electrică", 0)
+                        tree_hours = real_world_eq.get("ore necesare unui copac pentru a absorbi", 0)
+                        if km_ev > 0.01:
+                            eq_text += f"🚗 **{km_ev:.2f} km** cu o mașină electrică"
+                        if tree_hours > 0.1:
+                            if eq_text: eq_text += " sau "
+                            eq_text += f"🌳 **{tree_hours:.1f} ore** de absorbție de către un copac."
+                    
                     col1, col2, col3, col4, col5 = st.columns(5)
                     with col1: st.metric("💻 Op. CPU", f"{result.get('cpu_operations', 0.0):,.0f}")
                     with col2: st.metric("💾 Mișc. Date", f"{result.get('data_movement_units', 0.0):,.0f}")
@@ -196,7 +280,8 @@ if st.session_state.simulation_has_run:
                         mem_usage = result.get('peak_memory_usage_data_units', result.get('memory_usage_data_units', 0.0))
                         st.metric("🧠 Memorie", f"{mem_usage:,.0f}")
                     with col4: st.metric("⚡ Energie (kWh)", f"{result.get('estimated_kwh', 0.0):.6f}")
-                    with col5: st.metric("💨 CO2 (g)", f"{result.get('estimated_co2_g', 0.0):,.2f}")
+                    with col5: st.metric("💨 CO2 (g)", f"{result.get('estimated_co2_g', 0.0):,.2f}", help=eq_text if eq_text else "Nu există echivalent semnificativ")
+                    
                     st.caption(f"Complexitate CPU: {result.get('complexity_cpu', 'N/A')} | Complexitate Memorie: {result.get('complexity_memory', 'N/A')}")
                     model_name = result.get('name')
                     if model_name and model_name in config.MODEL_EXPLANATIONS:
@@ -240,50 +325,45 @@ if st.session_state.simulation_has_run:
                 else:
                     st.info("Niciun rezultat salvat în această sesiune.")
 
-            # --- NOU: Codul pentru Analiza de Sensibilitate mutat aici ---
             with tab_what_if:
                 st.subheader("🔬 Analiză de Sensibilitate 'What-If'")
                 st.info("Explorați cum se modifică impactul dacă variați un singur parametru secundar, menținând restul constanți.")
-
                 what_if_params = {
                     config.SCENARIU_SORTARE: {"Dim. înregistrare (u)": "s1_avg_rec_size"},
                     config.SCENARIU_RAPORT_VANZARI: {"Nr. mediu itemi/tranz. (M)": "s2_avg_items", "Dim. item tranz. (u)": "s2_item_size"},
                     config.SCENARIU_FILTRARE_LOGURI: {"Procentaj linii eroare (%)": "s3_err_perc", "Lung. medie linie (u)": "s3_avg_line_len"}
                 }
-
                 param_to_vary_name = st.selectbox("Alege parametrul de variat:", options=list(what_if_params[selected_scenario].keys()), key="what_if_param_select")
                 
                 if param_to_vary_name:
                     param_key = what_if_params[selected_scenario][param_to_vary_name]
                     current_value = st.session_state[param_key]
-                    
                     min_val = max(1, int(current_value * 0.2))
                     max_val = int(current_value * 2.0)
-                    
                     varied_range = st.slider(f"Alege un interval pentru '{param_to_vary_name}':", min_value=min_val, max_value=max_val, value=(min_val, max_val), key="what_if_slider")
-
                     what_if_results = []
                     for val in np.linspace(varied_range[0], varied_range[1], 15, dtype=int):
                         models = []
                         if selected_scenario == config.SCENARIU_SORTARE:
-                            args_std = (s1_N, val, kwh_cpu, kwh_data, gco2_per_kwh_final)
-                            args_eff = (s1_N, val, kwh_cpu, kwh_data, gco2_per_kwh_final)
-                            args_idx = (s1_N, val, s1_key_idx_size, kwh_cpu, kwh_data, gco2_per_kwh_final)
+                            # Variabilele 's1_N', etc., nu sunt definite în acest scope. Trebuie să le luăm din st.session_state
+                            s1_N_local, s1_key_idx_size_local = st.session_state.s1_N, st.session_state.s1_key_idx_size
+                            args_std = (s1_N_local, val, kwh_cpu, kwh_data, gco2_per_kwh_final)
+                            args_eff = (s1_N_local, val, kwh_cpu, kwh_data, gco2_per_kwh_final)
+                            args_idx = (s1_N_local, val, s1_key_idx_size_local, kwh_cpu, kwh_data, gco2_per_kwh_final)
                             models = [api_handler.model_standard_sort(*args_std), api_handler.model_efficient_sort(*args_eff), api_handler.model_sort_index(*args_idx)]
                         elif selected_scenario == config.SCENARIU_RAPORT_VANZARI:
-                            base_args = {"num_transactions": s2_N_trans, "avg_items_per_transaction": s2_avg_items, "avg_record_size_transaction_header": s2_trans_header_size, "avg_record_size_item": s2_item_size, "kwh_cpu": kwh_cpu, "kwh_data": kwh_data, "gco2_factor": gco2_per_kwh_final}
+                            base_args = {"num_transactions": st.session_state.s2_N_trans, "avg_items_per_transaction": st.session_state.s2_avg_items, "avg_record_size_transaction_header": st.session_state.s2_trans_header_size, "avg_record_size_item": st.session_state.s2_item_size, "kwh_cpu": kwh_cpu, "kwh_data": kwh_data, "gco2_factor": gco2_per_kwh_final}
                             if param_key == "s2_avg_items": base_args["avg_items_per_transaction"] = val
                             if param_key == "s2_item_size": base_args["avg_record_size_item"] = val
                             models = [api_handler.model_standard_sales_report(**base_args), api_handler.model_green_sales_report(**base_args)]
                         elif selected_scenario == config.SCENARIU_FILTRARE_LOGURI:
-                            base_args = {"num_log_lines": s3_N_lines, "avg_line_length": s3_avg_line_len, "error_line_percentage": s3_err_perc, "avg_error_message_size": s3_err_msg_size, "kwh_cpu": kwh_cpu, "kwh_data": kwh_data, "gco2_factor": gco2_per_kwh_final}
+                            base_args = {"num_log_lines": st.session_state.s3_N_lines, "avg_line_length": st.session_state.s3_avg_line_len, "error_line_percentage": st.session_state.s3_err_perc, "avg_error_message_size": st.session_state.s3_err_msg_size, "kwh_cpu": kwh_cpu, "kwh_data": kwh_data, "gco2_factor": gco2_per_kwh_final}
                             if param_key == "s3_err_perc": base_args["error_line_percentage"] = val
                             if param_key == "s3_avg_line_len": base_args["avg_line_length"] = val
                             models = [api_handler.model_standard_log_filter(**base_args), api_handler.model_green_log_filter(**base_args)]
                         for res in models:
                             res[param_to_vary_name] = val
                             what_if_results.append(res)
-
                     df_what_if = pd.DataFrame(what_if_results)
                     fig_what_if = px.line(df_what_if, x=param_to_vary_name, y="estimated_co2_g", color="name", title=f"Sensibilitatea emisiilor de CO2 la '{param_to_vary_name}'", labels={"estimated_co2_g": "Emisii CO2 (g)", "name": "Model"}, markers=True)
                     st.plotly_chart(fig_what_if, use_container_width=True)
@@ -292,4 +372,17 @@ if st.session_state.simulation_has_run:
             st.info(config.DISCLAIMER_TEXT)
 
 elif not st.session_state.simulation_has_run:
-    st.info(config.INFO_START_MESSAGE)
+    col1, col2 = st.columns([1, 1.2])
+    with col1:
+        st.header("Bun venit la Simulatorul de Impact Software!")
+        st.markdown(config.INFO_START_MESSAGE)
+        st.info("Aplicația demonstrează cum alegerile algoritmice și de design pot influența consumul de resurse și emisiile de CO2.")
+        st.warning("**Toate valorile sunt estimări ilustrative.** Scopul este de a compara impactul *relativ* între diferite abordări.")
+    with col2:
+        st.markdown("### Cum funcționează?")
+        st.markdown("""
+        1.  **Alegeți un Scenariu:** Selectați un caz de utilizare comun (sortare, raportare, etc.).
+        2.  **Configurați Parametrii:** Ajustați dimensiunea datelor și alți factori relevanți.
+        3.  **Selectați Hardware și Sursă CO2:** Alegeți un profil hardware și sursa pentru calculul emisiilor.
+        4.  **Rulați Simularea:** Apăsați butonul pentru a vedea o comparație detaliată între o abordare standard și una optimizată ("verde").
+        """)
